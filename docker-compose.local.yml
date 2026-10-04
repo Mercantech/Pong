@@ -1,0 +1,8 @@
+services:
+  pong:
+    ports:
+      - "8080:8080"
+
+networks:
+  dokploy-network:
+    external: false

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PONG – Multiplayer</title>
+  <script>
+    (function () {
+      var m = location.pathname.match(/^(\/Pong)(?=\/|$)/i);
+      if (!m) return;
+      var base = document.createElement('base');
+      base.href = m[1] + '/';
+      document.currentScript.after(base);
+      if (location.pathname === m[1]) {
+        location.replace(m[1] + '/' + location.search + location.hash);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css?v=1">
+  <link rel="stylesheet" href="arena-nav.css?v=1">
+</head>
+<body>
+  <script src="arena-nav.js?v=1"></script>
+  <div id="app">
+    <div id="join-screen">
+      <h1>PONG</h1>
+      <p class="tagline">1972 · arcade · PIN-lobby · 2 spillere</p>
+      <div class="join-form">
+        <input type="text" id="pin-input" placeholder="PIN (fx 1234)" maxlength="8" autocomplete="off">
+        <input type="text" id="name-input" placeholder="Navn (valgfri)" maxlength="20" autocomplete="off">
+        <button id="btn-join" type="button">Join spil</button>
+      </div>
+      <p id="join-error" class="join-error hidden"></p>
+      <div class="join-actions">
+        <button id="btn-create-lobby" type="button" class="btn-secondary">Opret ny lobby</button>
+        <a href="admin.html" class="admin-link">Admin</a>
+      </div>
+    </div>
+
+    <div id="game-screen" class="hidden">
+      <header class="game-header">
+        <div>
+          <h1>PONG</h1>
+          <p id="lobby-pin" class="lobby-pin"></p>
+        </div>
+        <div id="status">Forbinder…</div>
+        <div class="header-controls">
+          <button id="btn-start" type="button" disabled>Start spil</button>
+          <button id="btn-reset" type="button" disabled>Nyt spil</button>
+        </div>
+      </header>
+
+      <div class="tv-frame">
+        <div class="score-bar">
+          <div>
+            <div class="player-label" id="label-left">VENSTRE</div>
+            <span id="score-left">0</span>
+          </div>
+          <div style="font-size:0.5rem;color:#666">FØRST TIL 11</div>
+          <div style="text-align:right">
+            <div class="player-label" id="label-right">HØJRE</div>
+            <span id="score-right">0</span>
+          </div>
+        </div>
+        <div class="tv-bezel">
+          <div class="court-wrap">
+            <canvas id="pong-canvas" width="800" height="600"></canvas>
+            <div id="overlay" class="overlay hidden">
+              <div class="overlay-box">
+                <h2 id="overlay-title">Venter</h2>
+                <p id="overlay-text"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p id="player-info" class="player-info"></p>
+      <p id="controls-hint" class="controls-hint"></p>
+    </div>
+  </div>
+  <script src="client.js?v=1"></script>
+</body>
+</html>

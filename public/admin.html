@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PONG – Admin</title>
+  <script>
+    (function () {
+      var m = location.pathname.match(/^(\/Pong)(?=\/|$)/i);
+      if (!m) return;
+      var base = document.createElement('base');
+      base.href = m[1] + '/';
+      document.currentScript.after(base);
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css?v=1">
+  <link rel="stylesheet" href="arena-nav.css?v=1">
+  <style>
+    .admin-page { max-width: 560px; margin: 2rem auto; padding: 1.5rem; background: #3d2510; border-radius: 8px; border: 4px solid #2a1808; }
+    .lobby-list { list-style: none; padding: 0; margin: 1rem 0; }
+    .lobby-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .admin-toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <script src="arena-nav.js?v=1"></script>
+  <div class="admin-page">
+    <h1>Admin</h1>
+    <p><a href="index.html">← Tilbage til spil</a></p>
+    <div class="admin-toolbar">
+      <button type="button" id="btn-refresh">Opdater liste</button>
+      <button type="button" id="btn-create">Opret lobby</button>
+    </div>
+    <p id="msg"></p>
+    <ul id="lobby-list" class="lobby-list"></ul>
+  </div>
+  <script>
+    (function () {
+      const pathMatch = location.pathname.match(/^(\/Pong)(?=\/|$)/i);
+      const BASE = pathMatch ? pathMatch[1] : '';
+      const api = (p) => BASE + p;
+      const listEl = document.getElementById('lobby-list');
+      const msgEl = document.getElementById('msg');
+
+      async function load() {
+        const res = await fetch(api('/api/admin/lobbies'));
+        const data = await res.json();
+        listEl.innerHTML = '';
+        for (const lb of data.lobbies || []) {
+          const li = document.createElement('li');
+          li.innerHTML = `<span><strong>${lb.pin}</strong> · ${lb.playerCount} spillere · ${lb.gameState}</span>`;
+          const del = document.createElement('button');
+          del.textContent = 'Slet';
+          del.type = 'button';
+          del.addEventListener('click', async () => {
+            await fetch(api('/api/admin/lobbies/' + lb.pin), { method: 'DELETE' });
+            load();
+          });
+          li.appendChild(del);
+          listEl.appendChild(li);
+        }
+      }
+
+      document.getElementById('btn-refresh').addEventListener('click', load);
+      document.getElementById('btn-create').addEventListener('click', async () => {
+        const res = await fetch(api('/api/admin/lobbies'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const data = await res.json();
+        msgEl.textContent = res.ok ? 'Ny PIN: ' + data.pin : (data.error || 'Fejl');
+        load();
+      });
+
+      load();
+    })();
+  </script>
+</body>
+</html>

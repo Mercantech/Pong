@@ -1,0 +1,88 @@
+/* Shared Mercantec Games top bar */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
+
+.arena-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  background: linear-gradient(180deg, #4a4a4a, #2f2f2f);
+  border-bottom: 3px solid #111;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
+}
+
+.arena-nav-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.arena-nav-mark {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: #fff;
+  text-shadow: 2px 2px 0 #000;
+}
+
+.arena-nav-sub {
+  font-family: 'VT323', monospace;
+  font-size: 1rem;
+  color: #bbb;
+  letter-spacing: 0.1em;
+}
+
+.arena-nav-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.arena-nav-links a {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.48rem;
+  line-height: 1.4;
+  padding: 0.5rem 0.6rem;
+  background: #c4c4c4;
+  color: #222 !important;
+  text-decoration: none !important;
+  border: 2px solid #111;
+  box-shadow: inset -2px -2px 0 #888, inset 2px 2px 0 #eee;
+  font-weight: 400;
+}
+
+.arena-nav-links a:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.arena-nav-links a.active {
+  background: #e71e28;
+  color: #fff !important;
+  border-color: #fff;
+  box-shadow: inset -2px -2px 0 #9b1218, inset 2px 2px 0 #ff6b6b, 0 0 0 2px #000;
+}
+
+.arena-nav-links a.active::before {
+  content: '► ';
+}
+
+@media (max-width: 560px) {
+  .arena-nav-mark {
+    font-size: 0.5rem;
+  }
+
+  .arena-nav-links a {
+    font-size: 0.4rem;
+    padding: 0.4rem 0.45rem;
+  }
+}
