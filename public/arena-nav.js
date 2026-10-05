@@ -1,6 +1,6 @@
 /**
  * Shared Mercantec Games navbar
- * Absolute paths — works with <base href="/Pong/">
+ * Absolute paths — works with game <base href>
  */
 (function () {
   if (document.querySelector('.arena-nav')) return;
@@ -11,6 +11,7 @@
     /\/Wizard/i.test(path) ? 'wizard' :
     /\/Tetris/i.test(path) ? 'tetris' :
     /\/Pong/i.test(path) ? 'pong' :
+    /\/TowerDefense/i.test(path) ? 'tower' :
     /\/guide/i.test(path) ? 'guide' :
     /\/status/i.test(path) ? 'status' :
     'select';
@@ -36,6 +37,7 @@
       '<a href="/Wizard/"' + cls('wizard') + '>WIZARD</a>' +
       '<a href="/Tetris/"' + cls('tetris') + '>TETRIS</a>' +
       '<a href="/Pong/"' + cls('pong') + '>PONG</a>' +
+      '<a href="/TowerDefense/"' + cls('tower') + '>TOWER</a>' +
     '</nav>';
 
   document.body.insertBefore(nav, document.body.firstChild);
