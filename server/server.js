@@ -38,14 +38,15 @@ function broadcastToLobby(pin, message) {
 function getLobbyList() {
   return [...lobbies.entries()].map(([pin, lobby]) => ({
     pin,
+    mode: lobby.game.mode,
     playerCount: lobby.clients.size + (lobby.controllerPlayers?.size || 0),
     gameState: lobby.game.gameState,
     createdAt: lobby.createdAt,
   }));
 }
 
-function createLobbyEntry(pin) {
-  const game = new PongGame();
+function createLobbyEntry(pin, mode = 'classic') {
+  const game = new PongGame(mode);
   const entry = {
     game,
     clients: new Set(),
@@ -109,7 +110,7 @@ function applyControllerAction(pinStr, playerId, action, params) {
     return { status: 403, body: { ok: false, error: 'Ugyldig controller' } };
   }
 
-  const resolvedAction = action || params?.action;
+  const resolvedAction = String(action || params?.action || '').toLowerCase();
   if (resolvedAction === 'move') {
     const direction = params?.direction || params?.dir;
     if (!['UP', 'DOWN', 'up', 'down'].includes(direction)) {
@@ -118,6 +119,27 @@ function applyControllerAction(pinStr, playerId, action, params) {
     applyPaddleInput(pinStr, playerId, direction);
   } else if (resolvedAction === 'stop') {
     applyPaddleInput(pinStr, playerId, 'stop');
+  } else if (
+    resolvedAction === 'wide' ||
+    resolvedAction === 'nudge' ||
+    resolvedAction === 'smash' ||
+    resolvedAction === 'power'
+  ) {
+    const power =
+      resolvedAction === 'power'
+        ? String(params?.power || params?.name || '').toLowerCase()
+        : resolvedAction;
+    if (!['wide', 'nudge', 'smash'].includes(power)) {
+      return { status: 400, body: { ok: false, error: 'power skal være wide, nudge eller smash' } };
+    }
+    if (lobby.game.mode !== 'arcade') {
+      return { status: 400, body: { ok: false, error: 'Kun i Arcade-mode' } };
+    }
+    const ok = lobby.game.usePower(playerId, power);
+    if (!ok) {
+      return { status: 429, body: { ok: false, error: 'Power på cooldown eller ugyldig' } };
+    }
+    broadcastToLobby(pinStr, { type: 'state', data: lobby.game.getState() });
   } else {
     return { status: 400, body: { ok: false, error: 'Ukendt action' } };
   }
@@ -144,16 +166,18 @@ function handleAdminApi(req, res) {
     });
     req.on('end', () => {
       try {
-        const { pin: reqPin } = JSON.parse(body || '{}');
+        const parsedBody = JSON.parse(body || '{}');
+        const { pin: reqPin, mode: reqMode } = parsedBody;
         const pin = reqPin ? String(reqPin).slice(0, 8) : generatePin();
         if (lobbies.has(pin)) {
           res.writeHead(409);
           res.end(JSON.stringify({ error: 'PIN eksisterer allerede', pin }));
           return;
         }
-        createLobbyEntry(pin);
+        const mode = reqMode === 'arcade' ? 'arcade' : 'classic';
+        createLobbyEntry(pin, mode);
         res.writeHead(201);
-        res.end(JSON.stringify({ pin }));
+        res.end(JSON.stringify({ pin, mode }));
       } catch (e) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: 'Ugyldig forespørgsel' }));
@@ -418,6 +442,21 @@ wss.on('connection', (ws) => {
           const dir = msg.direction || msg.action || msg.data?.direction;
           if (ws.playerId && dir) {
             applyPaddleInput(pin, ws.playerId, dir);
+          }
+          break;
+        }
+        case 'setMode': {
+          const mode = msg.mode === 'arcade' ? 'arcade' : 'classic';
+          if (game.setMode(mode)) {
+            broadcastToLobby(pin, { type: 'state', data: game.getState() });
+          }
+          break;
+        }
+        case 'power': {
+          const power = msg.power || msg.name || msg.action;
+          if (ws.playerId && power) {
+            game.usePower(ws.playerId, power);
+            broadcastToLobby(pin, { type: 'state', data: game.getState() });
           }
           break;
         }

@@ -33,6 +33,7 @@
   const labelRight = document.getElementById('label-right');
   const playerInfo = document.getElementById('player-info');
   const controlsHint = document.getElementById('controls-hint');
+  const powerHud = document.getElementById('power-hud');
 
   let ws = null;
   let playerId = null;
@@ -40,6 +41,11 @@
   let pin = null;
   let state = null;
   const keysDown = new Set();
+
+  function selectedMode() {
+    const el = document.querySelector('input[name="game-mode"]:checked');
+    return el && el.value === 'arcade' ? 'arcade' : 'classic';
+  }
 
   function showError(msg) {
     joinError.textContent = msg;
@@ -88,7 +94,9 @@
         state = msg.data.state;
         joinScreen.classList.add('hidden');
         gameScreen.classList.remove('hidden');
-        lobbyPinEl.textContent = `PIN: ${pin}`;
+        lobbyPinEl.textContent = `PIN: ${pin}${
+          state?.mode === 'arcade' ? ' · ARCADE' : ' · CLASSIC'
+        }`;
         updateUi();
         return;
       }
@@ -111,9 +119,13 @@
     const payload = { type: 'joinLobby', pin, name: name || undefined };
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       connectWs();
-      ws.addEventListener('open', () => {
-        ws.send(JSON.stringify(payload));
-      }, { once: true });
+      ws.addEventListener(
+        'open',
+        () => {
+          ws.send(JSON.stringify(payload));
+        },
+        { once: true }
+      );
     } else {
       ws.send(JSON.stringify(payload));
     }
@@ -125,7 +137,7 @@
       const res = await fetch(apiUrl('/api/admin/lobbies'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify({ mode: selectedMode() }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -144,6 +156,59 @@
     ws.send(JSON.stringify({ type: 'paddle', direction }));
   }
 
+  function sendPower(power) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'power', power }));
+  }
+
+  function formatCd(ms) {
+    if (ms <= 0) return 'klar';
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  function updatePowerHud() {
+    if (!state || state.mode !== 'arcade' || !mySide || !state.powers?.[mySide]) {
+      powerHud.classList.add('hidden');
+      powerHud.innerHTML = '';
+      return;
+    }
+    const p = state.powers[mySide];
+    powerHud.classList.remove('hidden');
+    const chips = [
+      {
+        key: 'WIDE',
+        ready: p.wideCdMs <= 0,
+        active: p.wideActive,
+        cd: p.wideActive ? `aktiv ${formatCd(p.wideMs)}` : formatCd(p.wideCdMs),
+      },
+      {
+        key: 'NUDGE',
+        ready: p.nudgeCdMs <= 0,
+        active: false,
+        cd: formatCd(p.nudgeCdMs),
+      },
+      {
+        key: 'SMASH',
+        ready: p.smashCdMs <= 0 && !p.smashArmed,
+        armed: p.smashArmed,
+        cd: p.smashArmed ? 'ladet' : formatCd(p.smashCdMs),
+      },
+    ];
+    powerHud.innerHTML = chips
+      .map((c) => {
+        const cls = [
+          'power-chip',
+          c.ready ? 'ready' : '',
+          c.active ? 'active' : '',
+          c.armed ? 'armed' : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        return `<div class="${cls}">${c.key}<span class="cd">${c.cd}</span></div>`;
+      })
+      .join('');
+  }
+
   function updateUi() {
     if (!state) return;
 
@@ -157,6 +222,12 @@
       labelRight.textContent = state.paddles.right.name.toUpperCase();
     }
 
+    if (pin) {
+      lobbyPinEl.textContent = `PIN: ${pin}${
+        state.mode === 'arcade' ? ' · ARCADE' : ' · CLASSIC'
+      }`;
+    }
+
     const me = playerId ? state.players[playerId] : null;
     if (me) {
       if (me.isSpectator) {
@@ -165,7 +236,12 @@
       } else {
         const sideLabel = me.side === 'left' ? 'venstre paddle' : 'højre paddle';
         playerInfo.textContent = `${me.name} · ${sideLabel}`;
-        if (me.side === 'left') {
+        if (state.mode === 'arcade') {
+          controlsHint.textContent =
+            me.side === 'left'
+              ? 'W/S · 1/Q WIDE · 3/E NUDGE · 4/Space SMASH'
+              : '↑/↓ · 1 WIDE · 3 NUDGE · 4/Space SMASH';
+        } else if (me.side === 'left') {
           controlsHint.textContent = 'Styr: W/S eller ↑/↓';
         } else {
           controlsHint.textContent = 'Styr: ↑/↓ (højre paddle)';
@@ -181,11 +257,14 @@
     overlay.classList.add('hidden');
     if (state.gameState === 'waiting') {
       overlay.classList.remove('hidden');
-      overlayTitle.textContent = 'Venter på start';
+      overlayTitle.textContent =
+        state.mode === 'arcade' ? 'Arcade — venter' : 'Venter på start';
       overlayText.textContent =
         paddleCount < 2
           ? 'Vent på modstander (2 spillere)'
-          : 'Tryk «Start spil» når I er klar';
+          : state.mode === 'arcade'
+            ? 'WIDE · NUDGE · SMASH — tryk «Start spil»'
+            : 'Tryk «Start spil» når I er klar';
     } else if (state.gameState === 'finished') {
       overlay.classList.remove('hidden');
       const won =
@@ -201,11 +280,14 @@
 
     statusEl.textContent =
       state.gameState === 'playing'
-        ? 'Spiller'
+        ? state.mode === 'arcade'
+          ? 'Arcade'
+          : 'Spiller'
         : state.gameState === 'finished'
           ? 'Afsluttet'
           : 'Lobby';
 
+    updatePowerHud();
     draw();
   }
 
@@ -213,10 +295,15 @@
     if (!state) return;
     const w = state.court.width;
     const h = state.court.height;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
     const pw = state.paddle.width;
-    const ph = state.paddle.height;
     const margin = state.paddle.margin;
     const br = state.ball.radius;
+    const leftH = state.paddles?.left?.height ?? state.paddle.height;
+    const rightH = state.paddles?.right?.height ?? state.paddle.height;
 
     ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, w, h);
@@ -230,13 +317,21 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.fillStyle = '#fff';
-    const leftY = state.paddles?.left?.y ?? (h - ph) / 2;
-    const rightY = state.paddles?.right?.y ?? (h - ph) / 2;
-    ctx.fillRect(margin, leftY, pw, ph);
-    ctx.fillRect(w - margin - pw, rightY, pw, ph);
+    const leftY = state.paddles?.left?.y ?? (h - leftH) / 2;
+    const rightY = state.paddles?.right?.y ?? (h - rightH) / 2;
+
+    const leftPow = state.powers?.left;
+    const rightPow = state.powers?.right;
+
+    ctx.fillStyle = leftPow?.wideActive ? '#8cf' : leftPow?.smashArmed ? '#f80' : '#fff';
+    ctx.fillRect(margin, leftY, pw, leftH);
+    ctx.fillStyle = rightPow?.wideActive ? '#8cf' : rightPow?.smashArmed ? '#f80' : '#fff';
+    ctx.fillRect(w - margin - pw, rightY, pw, rightH);
 
     const ball = state.ball;
+    const smashBall =
+      (leftPow?.smashArmed && ball.vx > 0) || (rightPow?.smashArmed && ball.vx < 0);
+    ctx.fillStyle = smashBall ? '#ff8c00' : '#fff';
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, br, 0, Math.PI * 2);
     ctx.fill();
@@ -246,6 +341,21 @@
     if (!state || state.gameState !== 'playing') return;
     const me = state.players[playerId];
     if (!me || me.isSpectator) return;
+
+    if (state.mode === 'arcade' && !keysDown.has(e.key)) {
+      let power = null;
+      if (e.key === '1' || e.key === 'q' || e.key === 'Q') power = 'wide';
+      if (e.key === '3' || e.key === 'e' || e.key === 'E') power = 'nudge';
+      if (e.key === '4' || e.key === ' ' || e.key === 'r' || e.key === 'R') {
+        power = 'smash';
+      }
+      if (power) {
+        keysDown.add(e.key);
+        sendPower(power);
+        e.preventDefault();
+        return;
+      }
+    }
 
     let dir = null;
     if (me.side === 'left') {

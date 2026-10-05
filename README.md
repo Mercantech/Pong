@@ -38,19 +38,26 @@ Actions:
 
 - `"move"` + `params.direction`: `"UP"` \| `"DOWN"`
 - `"stop"` — nulstil paddle-hastighed
+- **Arcade:** `"wide"` · `"nudge"` · `"smash"` (ignoreres i Classic)
+
+### Modes
+
+- **Classic** — ren paddle-duel (default)
+- **Arcade** — vælges ved opret lobby: **WIDE** (højere paddle), **NUDGE** (snap til bold), **SMASH** (næste hit hurtigere)
 
 ### Firmware
 
 Sæt **`GAME_MODE_PONG`** på Oplà-controlleren.
 
-Touch/pad (typisk):
+Touch/pad:
 
-| Pad | Retning |
-|-----|---------|
-| **TOUCH0** | OP (UP) |
-| **TOUCH2** | NED (DOWN) |
-
-Alternativt **TOUCH1** / **TOUCH3** hvis det matcher jeres board-layout.
+| Pad | Classic / begge | Arcade |
+|-----|-----------------|--------|
+| **TOUCH0** | OP (UP) | OP |
+| **TOUCH2** | NED (DOWN) | NED |
+| **TOUCH1** | — | **WIDE** |
+| **TOUCH3** | — | **NUDGE** |
+| **TOUCH4** | — | **SMASH** |
 
 Base URL inkl. path: **`https://…/Pong/`** (med trailing slash i SPA; API-kald: `/Pong/api/controller/...` via reverse proxy).
 
@@ -60,13 +67,16 @@ Base URL inkl. path: **`https://…/Pong/`** (med trailing slash i SPA; API-kald
 - `createLobby` — `{ pin? }` (valgfri fast PIN)
 - `start` / `reset`
 - `paddle` — `{ direction: "up" \| "down" \| "stop" }`
-- Server broadcaster `state` med score, bold, paddles
+- `power` — `{ power: "wide" \| "nudge" \| "smash" }` (Arcade)
+- `setMode` — `{ mode: "classic" \| "arcade" }` (før start)
+- Server broadcaster `state` med score, bold, paddles (+ `powers` i Arcade)
 
 ## Spilregler
 
 - Første til **11** point vinder.
 - Server-autoritativ fysik; bold nulstilles efter point.
 - Max **2** paddle-spillere per lobby; flere joins bliver **tilskuere**.
+- Arcade-powers har cooldown; SMASH lades til næste paddle-hit.
 
 ## Admin
 

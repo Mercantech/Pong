@@ -16,7 +16,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=1">
+  <link rel="stylesheet" href="style.css?v=2">
   <link rel="stylesheet" href="arena-nav.css?v=1">
 </head>
 <body>
@@ -24,10 +24,15 @@
   <div id="app">
     <div id="join-screen">
       <h1>PONG</h1>
-      <p class="tagline">1972 · arcade · PIN-lobby · 2 spillere</p>
+      <p class="tagline">1972 · classic / arcade · PIN-lobby · 2 spillere</p>
       <div class="join-form">
         <input type="text" id="pin-input" placeholder="PIN (fx 1234)" maxlength="8" autocomplete="off">
         <input type="text" id="name-input" placeholder="Navn (valgfri)" maxlength="20" autocomplete="off">
+        <fieldset class="mode-picker">
+          <legend>Mode (ved opret)</legend>
+          <label><input type="radio" name="game-mode" value="classic" checked> Classic</label>
+          <label><input type="radio" name="game-mode" value="arcade"> Arcade</label>
+        </fieldset>
         <button id="btn-join" type="button">Join spil</button>
       </div>
       <p id="join-error" class="join-error hidden"></p>
@@ -77,8 +82,9 @@
 
       <p id="player-info" class="player-info"></p>
       <p id="controls-hint" class="controls-hint"></p>
+      <div id="power-hud" class="power-hud hidden"></div>
     </div>
   </div>
-  <script src="client.js?v=1"></script>
+  <script src="client.js?v=2"></script>
 </body>
 </html>

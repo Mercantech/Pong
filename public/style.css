@@ -271,3 +271,68 @@ body {
 .spectator-badge {
   color: var(--accent-orange);
 }
+
+.mode-picker {
+  border: 2px solid #111;
+  background: #1a1208;
+  padding: 0.5rem 0.75rem;
+  margin: 0;
+  text-align: left;
+}
+
+.mode-picker legend {
+  padding: 0 0.35rem;
+  color: var(--accent-yellow);
+  font-size: 1rem;
+}
+
+.mode-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 1rem;
+  cursor: pointer;
+  color: #ddd;
+}
+
+.power-hud {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.power-chip {
+  min-width: 7.5rem;
+  padding: 0.4rem 0.65rem;
+  border: 2px solid #444;
+  background: #111;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 0.45rem;
+  color: #aaa;
+  text-align: center;
+}
+
+.power-chip.ready {
+  border-color: var(--accent-yellow);
+  color: var(--accent-yellow);
+}
+
+.power-chip.active {
+  border-color: #5ad;
+  color: #8cf;
+}
+
+.power-chip.armed {
+  border-color: var(--accent-orange);
+  color: var(--accent-orange);
+}
+
+.power-chip .cd {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: 'VT323', monospace;
+  font-size: 1.1rem;
+  color: #666;
+}

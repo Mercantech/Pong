@@ -1,284 +1,367 @@
 /**
- * Classic Pong – server-authoritative 2-player lobby game
+ * Klassisk Pong + Arcade (WIDE / NUDGE / SMASH).
  */
 
-const WIN_SCORE = 11;
-
 const COURT_W = 800;
-const COURT_H = 600;
+const COURT_H = 450;
 const PADDLE_W = 12;
-const PADDLE_H = 100;
+const PADDLE_H = 72;
 const PADDLE_MARGIN = 24;
-const PADDLE_SPEED = 420;
 const BALL_R = 8;
+const PADDLE_SPEED = 380;
 const BALL_SPEED = 320;
+const BALL_SPEED_MAX = 560;
+const WIN_SCORE = 11;
+const TICK_MS = 1000 / 60;
+
+const WIDE_SCALE = 1.7;
+const WIDE_MS = 2800;
+const WIDE_CD_MS = 8000;
+const NUDGE_CD_MS = 4500;
+const SMASH_CD_MS = 7000;
+const SMASH_MULT = 1.55;
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-function createPlayer(id, name, side) {
-  const isSpectator = side === 'spectator';
-  const paddleY = (COURT_H - PADDLE_H) / 2;
-  return {
-    id,
-    name,
-    side,
-    isSpectator,
-    paddleY,
-    velocity: 0,
-  };
-}
-
-function resetBall(towardLeft = false) {
-  const angle = (Math.random() * 0.6 - 0.3) * Math.PI;
-  const dir = towardLeft ? Math.PI : 0;
-  const vx = Math.cos(angle + dir) * BALL_SPEED;
-  const vy = Math.sin(angle + dir) * BALL_SPEED;
-  const sign = Math.random() > 0.5 ? 1 : -1;
-  return {
-    x: COURT_W / 2,
-    y: COURT_H / 2,
-    vx: vx || (towardLeft ? -BALL_SPEED : BALL_SPEED),
-    vy: vy * sign * 0.5 || sign * BALL_SPEED * 0.35,
-  };
-}
-
 class PongGame {
-  constructor() {
-    this.players = new Map();
+  constructor(mode = 'classic') {
+    this.mode = mode === 'arcade' ? 'arcade' : 'classic';
+    this.players = {};
     this.leftPlayerId = null;
     this.rightPlayerId = null;
-    this.gameState = 'waiting';
     this.scoreLeft = 0;
     this.scoreRight = 0;
+    this.gameState = 'waiting';
     this.winnerSide = null;
     this.winnerName = null;
-    this.ball = resetBall(Math.random() > 0.5);
-    this._lastTick = Date.now();
-    this.serveLeft = true;
+    this._lastTs = 0;
+    this._resetBall(1);
+    this.leftY = (COURT_H - PADDLE_H) / 2;
+    this.rightY = (COURT_H - PADDLE_H) / 2;
+    this.leftDir = 0;
+    this.rightDir = 0;
+    this._initPowers();
   }
 
-  _paddlePlayerCount() {
-    let n = 0;
-    if (this.leftPlayerId) n++;
-    if (this.rightPlayerId) n++;
-    return n;
+  _initPowers() {
+    this.powers = {
+      left: {
+        wideUntil: 0,
+        wideReadyAt: 0,
+        nudgeReadyAt: 0,
+        smashReadyAt: 0,
+        smashArmed: false,
+      },
+      right: {
+        wideUntil: 0,
+        wideReadyAt: 0,
+        nudgeReadyAt: 0,
+        smashReadyAt: 0,
+        smashArmed: false,
+      },
+    };
   }
 
-  _assignSide() {
-    if (!this.leftPlayerId) return 'left';
-    if (!this.rightPlayerId) return 'right';
-    return 'spectator';
+  setMode(mode) {
+    if (this.gameState === 'playing') return false;
+    this.mode = mode === 'arcade' ? 'arcade' : 'classic';
+    return true;
+  }
+
+  _paddleHeight(side, now = Date.now()) {
+    if (this.mode !== 'arcade') return PADDLE_H;
+    const p = this.powers[side];
+    return now < p.wideUntil ? Math.round(PADDLE_H * WIDE_SCALE) : PADDLE_H;
+  }
+
+  _maxY(side, now = Date.now()) {
+    return COURT_H - this._paddleHeight(side, now);
+  }
+
+  _resetBall(dirX = 1) {
+    const angle = (Math.random() * 0.6 - 0.3) * Math.PI;
+    this.ball = {
+      x: COURT_W / 2,
+      y: COURT_H / 2,
+      vx: Math.cos(angle) * BALL_SPEED * dirX,
+      vy: Math.sin(angle) * BALL_SPEED,
+    };
   }
 
   addPlayer(id, name) {
-    const side = this._assignSide();
-    const displayName = name ? String(name).trim().slice(0, 20) : `Spiller ${this.players.size + 1}`;
-    const p = createPlayer(id, displayName, side);
-    this.players.set(id, p);
-    if (side === 'left') this.leftPlayerId = id;
-    else if (side === 'right') this.rightPlayerId = id;
-    return p;
+    const existing = this.players[id];
+    if (existing) return existing;
+
+    let side = null;
+    let isSpectator = false;
+    if (!this.leftPlayerId) {
+      side = 'left';
+      this.leftPlayerId = id;
+    } else if (!this.rightPlayerId) {
+      side = 'right';
+      this.rightPlayerId = id;
+    } else {
+      isSpectator = true;
+    }
+
+    const player = {
+      id,
+      name: name || `Spiller ${Object.keys(this.players).length + 1}`,
+      side,
+      isSpectator,
+    };
+    this.players[id] = player;
+    return player;
   }
 
   removePlayer(id) {
-    const p = this.players.get(id);
+    const p = this.players[id];
     if (!p) return;
-    if (this.leftPlayerId === id) this.leftPlayerId = null;
-    if (this.rightPlayerId === id) this.rightPlayerId = null;
-    this.players.delete(id);
-    if (this.gameState === 'playing') {
-      this._checkWinByForfeit();
+    if (this.leftPlayerId === id) {
+      this.leftPlayerId = null;
+      this.leftDir = 0;
+    }
+    if (this.rightPlayerId === id) {
+      this.rightPlayerId = null;
+      this.rightDir = 0;
+    }
+    delete this.players[id];
+    if (this.gameState === 'playing' && !p.isSpectator) {
+      this.gameState = 'finished';
+      this.winnerSide = null;
+      this.winnerName = null;
     }
   }
 
-  getPlayerSide(id) {
-    const p = this.players.get(id);
-    return p ? p.side : null;
-  }
-
-  setPaddleInput(id, direction) {
-    const p = this.players.get(id);
-    if (!p || p.isSpectator) return false;
-    if (direction === 'UP' || direction === 'up') {
-      p.velocity = -PADDLE_SPEED;
-    } else if (direction === 'DOWN' || direction === 'down') {
-      p.velocity = PADDLE_SPEED;
-    } else if (direction === 'stop' || direction === 'STOP') {
-      p.velocity = 0;
-    } else {
-      return false;
-    }
+  setPaddleInput(playerId, direction) {
+    const p = this.players[playerId];
+    if (!p || p.isSpectator || !p.side) return false;
+    const d = String(direction || '').toLowerCase();
+    let dir = 0;
+    if (d === 'up') dir = -1;
+    else if (d === 'down') dir = 1;
+    else dir = 0;
+    if (p.side === 'left') this.leftDir = dir;
+    else this.rightDir = dir;
     return true;
+  }
+
+  /** Arcade: wide | nudge | smash (eller power aliases). */
+  usePower(playerId, power) {
+    if (this.mode !== 'arcade' || this.gameState !== 'playing') return false;
+    const p = this.players[playerId];
+    if (!p || p.isSpectator || !p.side) return false;
+    const now = Date.now();
+    const side = p.side;
+    const pow = this.powers[side];
+    const key = String(power || '').toLowerCase();
+
+    if (key === 'wide' || key === 'power_wide' || key === '1') {
+      if (now < pow.wideReadyAt) return false;
+      pow.wideUntil = now + WIDE_MS;
+      pow.wideReadyAt = now + WIDE_CD_MS;
+      const h = this._paddleHeight(side, now);
+      if (side === 'left') this.leftY = clamp(this.leftY, 0, COURT_H - h);
+      else this.rightY = clamp(this.rightY, 0, COURT_H - h);
+      return true;
+    }
+
+    if (key === 'nudge' || key === 'power_nudge' || key === '3') {
+      if (now < pow.nudgeReadyAt) return false;
+      const h = this._paddleHeight(side, now);
+      const target = this.ball.y - h / 2;
+      if (side === 'left') this.leftY = clamp(target, 0, COURT_H - h);
+      else this.rightY = clamp(target, 0, COURT_H - h);
+      pow.nudgeReadyAt = now + NUDGE_CD_MS;
+      return true;
+    }
+
+    if (key === 'smash' || key === 'power_smash' || key === '4') {
+      if (now < pow.smashReadyAt || pow.smashArmed) return false;
+      pow.smashArmed = true;
+      pow.smashReadyAt = now + SMASH_CD_MS;
+      return true;
+    }
+
+    return false;
   }
 
   start() {
-    if (this._paddlePlayerCount() < 2) return false;
-    this.reset(false);
+    if (this.gameState === 'playing') return false;
+    if (!this.leftPlayerId || !this.rightPlayerId) return false;
+    this.scoreLeft = 0;
+    this.scoreRight = 0;
+    this.winnerSide = null;
+    this.winnerName = null;
+    this.leftY = (COURT_H - PADDLE_H) / 2;
+    this.rightY = (COURT_H - PADDLE_H) / 2;
+    this.leftDir = 0;
+    this.rightDir = 0;
+    this._initPowers();
+    this._resetBall(Math.random() < 0.5 ? -1 : 1);
     this.gameState = 'playing';
-    this._lastTick = Date.now();
+    this._lastTs = Date.now();
     return true;
   }
 
-  reset(clearPlayers = true) {
+  reset(keepPlayers = true) {
     this.scoreLeft = 0;
     this.scoreRight = 0;
     this.winnerSide = null;
     this.winnerName = null;
     this.gameState = 'waiting';
-    this.serveLeft = Math.random() > 0.5;
-    this.ball = resetBall(!this.serveLeft);
-    if (clearPlayers) {
-      for (const p of this.players.values()) {
-        p.paddleY = (COURT_H - PADDLE_H) / 2;
-        p.velocity = 0;
-      }
-    } else {
-      for (const p of this.players.values()) {
-        p.paddleY = (COURT_H - PADDLE_H) / 2;
-        p.velocity = 0;
-      }
+    this.leftY = (COURT_H - PADDLE_H) / 2;
+    this.rightY = (COURT_H - PADDLE_H) / 2;
+    this.leftDir = 0;
+    this.rightDir = 0;
+    this._initPowers();
+    this._resetBall(1);
+    if (!keepPlayers) {
+      this.players = {};
+      this.leftPlayerId = null;
+      this.rightPlayerId = null;
     }
-  }
-
-  _checkWinByForfeit() {
-    if (this._paddlePlayerCount() < 2 && this.gameState === 'playing') {
-      this.gameState = 'finished';
-      if (this.leftPlayerId && !this.rightPlayerId) {
-        this.winnerSide = 'left';
-        this.winnerName = this.players.get(this.leftPlayerId)?.name || 'Venstre';
-      } else if (this.rightPlayerId && !this.leftPlayerId) {
-        this.winnerSide = 'right';
-        this.winnerName = this.players.get(this.rightPlayerId)?.name || 'Højre';
-      }
-    }
-  }
-
-  _checkWinScore() {
-    if (this.scoreLeft >= WIN_SCORE) {
-      this.gameState = 'finished';
-      this.winnerSide = 'left';
-      this.winnerName = this.players.get(this.leftPlayerId)?.name || 'Venstre';
-      return true;
-    }
-    if (this.scoreRight >= WIN_SCORE) {
-      this.gameState = 'finished';
-      this.winnerSide = 'right';
-      this.winnerName = this.players.get(this.rightPlayerId)?.name || 'Højre';
-      return true;
-    }
-    return false;
   }
 
   tick() {
     if (this.gameState !== 'playing') return;
-
     const now = Date.now();
-    const dt = Math.min(0.05, (now - this._lastTick) / 1000);
-    this._lastTick = now;
+    const dt = Math.min(0.05, (now - this._lastTs) / 1000);
+    this._lastTs = now;
 
-    for (const id of [this.leftPlayerId, this.rightPlayerId]) {
-      if (!id) continue;
-      const p = this.players.get(id);
-      if (!p) continue;
-      p.paddleY = clamp(p.paddleY + p.velocity * dt, 0, COURT_H - PADDLE_H);
-    }
+    const leftH = this._paddleHeight('left', now);
+    const rightH = this._paddleHeight('right', now);
 
-    let { x, y, vx, vy } = this.ball;
-    x += vx * dt;
-    y += vy * dt;
+    this.leftY = clamp(this.leftY + this.leftDir * PADDLE_SPEED * dt, 0, COURT_H - leftH);
+    this.rightY = clamp(this.rightY + this.rightDir * PADDLE_SPEED * dt, 0, COURT_H - rightH);
 
-    if (y - BALL_R <= 0) {
-      y = BALL_R;
-      vy = Math.abs(vy);
-    } else if (y + BALL_R >= COURT_H) {
-      y = COURT_H - BALL_R;
-      vy = -Math.abs(vy);
+    this.ball.x += this.ball.vx * dt;
+    this.ball.y += this.ball.vy * dt;
+
+    if (this.ball.y - BALL_R <= 0) {
+      this.ball.y = BALL_R;
+      this.ball.vy = Math.abs(this.ball.vy);
+    } else if (this.ball.y + BALL_R >= COURT_H) {
+      this.ball.y = COURT_H - BALL_R;
+      this.ball.vy = -Math.abs(this.ball.vy);
     }
 
     const leftX = PADDLE_MARGIN;
+    if (
+      this.ball.vx < 0 &&
+      this.ball.x - BALL_R <= leftX + PADDLE_W &&
+      this.ball.x + BALL_R >= leftX &&
+      this.ball.y + BALL_R >= this.leftY &&
+      this.ball.y - BALL_R <= this.leftY + leftH
+    ) {
+      this.ball.x = leftX + PADDLE_W + BALL_R;
+      this._bounceFromPaddle('left', leftH, now);
+    }
+
     const rightX = COURT_W - PADDLE_MARGIN - PADDLE_W;
-
-    const hitPaddle = (paddleY, px) => {
-      if (x - BALL_R > px + PADDLE_W || x + BALL_R < px) return false;
-      const py = paddleY;
-      if (y + BALL_R < py || y - BALL_R > py + PADDLE_H) return false;
-
-      const hitPos = (y - (py + PADDLE_H / 2)) / (PADDLE_H / 2);
-      const speed = Math.min(BALL_SPEED * 1.15, Math.hypot(vx, vy) * 1.05);
-      vx = px < COURT_W / 2 ? Math.abs(vx) : -Math.abs(vx);
-      vy = hitPos * speed * 0.85;
-      const len = Math.hypot(vx, vy) || 1;
-      vx = (vx / len) * speed;
-      vy = (vy / len) * speed;
-      x = px < COURT_W / 2 ? px + PADDLE_W + BALL_R : px - BALL_R;
-      return true;
-    };
-
-    if (this.leftPlayerId) {
-      const lp = this.players.get(this.leftPlayerId);
-      if (lp && vx < 0) hitPaddle(lp.paddleY, leftX);
-    }
-    if (this.rightPlayerId) {
-      const rp = this.players.get(this.rightPlayerId);
-      if (rp && vx > 0) hitPaddle(rp.paddleY, rightX);
+    if (
+      this.ball.vx > 0 &&
+      this.ball.x + BALL_R >= rightX &&
+      this.ball.x - BALL_R <= rightX + PADDLE_W &&
+      this.ball.y + BALL_R >= this.rightY &&
+      this.ball.y - BALL_R <= this.rightY + rightH
+    ) {
+      this.ball.x = rightX - BALL_R;
+      this._bounceFromPaddle('right', rightH, now);
     }
 
-    if (x + BALL_R < 0) {
+    if (this.ball.x + BALL_R < 0) {
       this.scoreRight += 1;
-      if (!this._checkWinScore()) {
-        this.serveLeft = true;
-        this.ball = resetBall(false);
-      }
-      return;
-    }
-    if (x - BALL_R > COURT_W) {
+      this._afterPoint(-1);
+    } else if (this.ball.x - BALL_R > COURT_W) {
       this.scoreLeft += 1;
-      if (!this._checkWinScore()) {
-        this.serveLeft = false;
-        this.ball = resetBall(true);
-      }
+      this._afterPoint(1);
+    }
+  }
+
+  _bounceFromPaddle(side, paddleH, now) {
+    const y = side === 'left' ? this.leftY : this.rightY;
+    const rel = (this.ball.y - (y + paddleH / 2)) / (paddleH / 2);
+    const angle = clamp(rel, -1, 1) * (Math.PI / 3);
+    let speed = Math.min(
+      BALL_SPEED_MAX,
+      Math.hypot(this.ball.vx, this.ball.vy) * 1.05
+    );
+    const pow = this.powers[side];
+    if (this.mode === 'arcade' && pow.smashArmed) {
+      speed = Math.min(BALL_SPEED_MAX * 1.15, speed * SMASH_MULT);
+      pow.smashArmed = false;
+    }
+    const dir = side === 'left' ? 1 : -1;
+    this.ball.vx = Math.cos(angle) * speed * dir;
+    this.ball.vy = Math.sin(angle) * speed;
+  }
+
+  _afterPoint(serveDir) {
+    if (this.scoreLeft >= WIN_SCORE || this.scoreRight >= WIN_SCORE) {
+      this.gameState = 'finished';
+      this.winnerSide = this.scoreLeft > this.scoreRight ? 'left' : 'right';
+      const wid = this.winnerSide === 'left' ? this.leftPlayerId : this.rightPlayerId;
+      this.winnerName = wid && this.players[wid] ? this.players[wid].name : null;
       return;
     }
+    this._resetBall(serveDir);
+  }
 
-    this.ball = { x, y, vx, vy };
+  _powerView(side, now) {
+    const p = this.powers[side];
+    return {
+      wideActive: now < p.wideUntil,
+      wideMs: Math.max(0, p.wideUntil - now),
+      wideCdMs: Math.max(0, p.wideReadyAt - now),
+      nudgeCdMs: Math.max(0, p.nudgeReadyAt - now),
+      smashCdMs: Math.max(0, p.smashReadyAt - now),
+      smashArmed: p.smashArmed,
+      height: this._paddleHeight(side, now),
+    };
   }
 
   getState() {
-    const players = {};
-    for (const [id, p] of this.players) {
-      players[id] = {
-        id: p.id,
-        name: p.name,
-        side: p.side,
-        isSpectator: p.isSpectator,
-        paddleY: p.paddleY,
-      };
-    }
-    const leftP = this.leftPlayerId ? this.players.get(this.leftPlayerId) : null;
-    const rightP = this.rightPlayerId ? this.players.get(this.rightPlayerId) : null;
-
+    const now = Date.now();
+    const leftH = this._paddleHeight('left', now);
+    const rightH = this._paddleHeight('right', now);
     return {
-      gameState: this.gameState,
+      mode: this.mode,
       court: { width: COURT_W, height: COURT_H },
       paddle: { width: PADDLE_W, height: PADDLE_H, margin: PADDLE_MARGIN },
+      paddles: {
+        left: {
+          y: this.leftY,
+          height: leftH,
+          name: this.leftPlayerId ? this.players[this.leftPlayerId]?.name : null,
+        },
+        right: {
+          y: this.rightY,
+          height: rightH,
+          name: this.rightPlayerId ? this.players[this.rightPlayerId]?.name : null,
+        },
+      },
+      powers:
+        this.mode === 'arcade'
+          ? {
+              left: this._powerView('left', now),
+              right: this._powerView('right', now),
+            }
+          : null,
       ball: { ...this.ball, radius: BALL_R },
       scoreLeft: this.scoreLeft,
       scoreRight: this.scoreRight,
       winScore: WIN_SCORE,
-      leftPlayerId: this.leftPlayerId,
-      rightPlayerId: this.rightPlayerId,
-      players,
-      playerOrder: [...this.players.keys()],
+      gameState: this.gameState,
       winnerSide: this.winnerSide,
       winnerName: this.winnerName,
-      paddles: {
-        left: leftP ? { y: leftP.paddleY, name: leftP.name } : null,
-        right: rightP ? { y: rightP.paddleY, name: rightP.name } : null,
-      },
+      players: this.players,
+      leftPlayerId: this.leftPlayerId,
+      rightPlayerId: this.rightPlayerId,
     };
   }
 }
 
-module.exports = { PongGame, COURT_W, COURT_H };
+module.exports = { PongGame, TICK_MS, COURT_W, COURT_H };
