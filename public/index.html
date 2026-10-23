@@ -16,30 +16,66 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
   <link rel="stylesheet" href="arena-nav.css?v=1">
 </head>
 <body>
   <script src="arena-nav.js?v=1"></script>
   <div id="app">
     <div id="join-screen">
+      <p class="hero-kicker">Mercantec Games</p>
       <h1>PONG</h1>
-      <p class="tagline">1972 · classic / arcade · PIN-lobby · 2 spillere</p>
-      <div class="join-form">
-        <input type="text" id="pin-input" placeholder="PIN (fx 1234)" maxlength="8" autocomplete="off">
-        <input type="text" id="name-input" placeholder="Navn (valgfri)" maxlength="20" autocomplete="off">
-        <fieldset class="mode-picker">
-          <legend>Mode (ved opret)</legend>
-          <label><input type="radio" name="game-mode" value="classic" checked> Classic</label>
-          <label><input type="radio" name="game-mode" value="arcade"> Arcade</label>
-        </fieldset>
-        <button id="btn-join" type="button">Join spil</button>
+      <p class="tagline">Classic / Arcade · PIN-lobby · menneske eller CPU</p>
+
+      <div class="lobby-panels">
+        <section class="lobby-panel">
+          <h2>Opret spil</h2>
+          <label class="field-label" for="create-name">Dit navn</label>
+          <input type="text" id="create-name" placeholder="Navn" maxlength="20" autocomplete="nickname">
+          <label class="field-label" for="create-pin">PIN (valgfri — fx Arduino)</label>
+          <input type="text" id="create-pin" placeholder="Tom = tilfældig" maxlength="8" autocomplete="off" inputmode="numeric">
+          <fieldset class="mode-picker">
+            <legend>Mode</legend>
+            <label><input type="radio" name="game-mode" value="classic" checked> Classic</label>
+            <label><input type="radio" name="game-mode" value="arcade"> Arcade</label>
+          </fieldset>
+          <label class="check-row">
+            <input type="checkbox" id="create-ai" checked>
+            Spil mod CPU
+          </label>
+          <label class="field-label" for="ai-difficulty">CPU-sværhedsgrad</label>
+          <select id="ai-difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+          <button id="btn-create-lobby" type="button" class="btn-primary">Opret spil</button>
+        </section>
+
+        <section class="lobby-panel">
+          <h2>Join med PIN</h2>
+          <label class="field-label" for="name-input">Dit navn</label>
+          <input type="text" id="name-input" placeholder="Navn (valgfri)" maxlength="20" autocomplete="nickname">
+          <label class="field-label" for="pin-input">PIN</label>
+          <input type="text" id="pin-input" placeholder="1234" maxlength="8" autocomplete="off" inputmode="numeric">
+          <button id="btn-join" type="button" class="btn-primary">Join spil</button>
+        </section>
       </div>
+
       <p id="join-error" class="join-error hidden"></p>
-      <div class="join-actions">
-        <button id="btn-create-lobby" type="button" class="btn-secondary">Opret ny lobby</button>
-        <a href="admin.html" class="admin-link">Admin</a>
-      </div>
+
+      <section class="open-lobbies">
+        <div class="open-lobbies-head">
+          <h2>Åbne lobbies</h2>
+          <button type="button" id="btn-refresh-lobbies" class="btn-ghost">Opdater</button>
+        </div>
+        <div id="open-lobby-list"></div>
+        <p id="no-open-lobbies" class="muted">Ingen åbne lobbies — opret et spil!</p>
+      </section>
+
+      <nav class="home-links">
+        <a href="admin.html">Lærer-værktøj</a>
+      </nav>
     </div>
 
     <div id="game-screen" class="hidden">
@@ -50,8 +86,10 @@
         </div>
         <div id="status">Forbinder…</div>
         <div class="header-controls">
+          <button id="btn-toggle-ai" type="button" class="btn-secondary hidden">Tilføj CPU</button>
           <button id="btn-start" type="button" disabled>Start spil</button>
           <button id="btn-reset" type="button" disabled>Nyt spil</button>
+          <button id="btn-leave" type="button" class="btn-ghost">Forlad</button>
         </div>
       </header>
 
@@ -69,7 +107,7 @@
         </div>
         <div class="tv-bezel">
           <div class="court-wrap">
-            <canvas id="pong-canvas" width="800" height="600"></canvas>
+            <canvas id="pong-canvas" width="800" height="450"></canvas>
             <div id="overlay" class="overlay hidden">
               <div class="overlay-box">
                 <h2 id="overlay-title">Venter</h2>
@@ -85,6 +123,6 @@
       <div id="power-hud" class="power-hud hidden"></div>
     </div>
   </div>
-  <script src="client.js?v=2"></script>
+  <script src="client.js?v=3"></script>
 </body>
 </html>

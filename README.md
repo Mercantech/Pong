@@ -1,6 +1,16 @@
 # Pong
 
-Klassisk 2-spiller Pong med PIN-lobby, WebSocket og Arduino controller-API — Mercantec Games-mønster (som Tetris/Bomberman).
+Klassisk / arcade Pong med åben PIN-lobby, **CPU-modstander**, WebSocket og Arduino controller-API.
+
+**Live:** [https://games.mercantec.tech/Pong/](https://games.mercantec.tech/Pong/)
+
+## Elev-flow
+
+1. **Opret spil** — valgfri custom PIN (fx Arduino `GAME_PIN`), Classic/Arcade, valgfrit **vs CPU** (easy/medium/hard)
+2. Eller **Join** / vælg en åben lobby
+3. Start når begge paddles er fyldt (menneske + menneske, eller menneske + CPU)
+
+Offentlig API: `GET/POST /api/lobbies` (`{ pin?, mode?, ai?, aiDifficulty? }`).
 
 ## Kør lokalt
 

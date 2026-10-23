@@ -1,5 +1,5 @@
 /**
- * Klassisk Pong + Arcade (WIDE / NUDGE / SMASH).
+ * Klassisk Pong + Arcade (WIDE / NUDGE / SMASH) + CPU-modstander.
  */
 
 const COURT_W = 800;
@@ -12,7 +12,6 @@ const PADDLE_SPEED = 380;
 const BALL_SPEED = 320;
 const BALL_SPEED_MAX = 560;
 const WIN_SCORE = 11;
-const TICK_MS = 1000 / 60;
 
 const WIDE_SCALE = 1.7;
 const WIDE_MS = 2800;
@@ -20,6 +19,14 @@ const WIDE_CD_MS = 8000;
 const NUDGE_CD_MS = 4500;
 const SMASH_CD_MS = 7000;
 const SMASH_MULT = 1.55;
+
+const AI_ID = 'ai_cpu';
+
+const AI_CFG = {
+  easy: { deadzone: 28, error: 52, reactionMs: 220, predict: false, powers: false },
+  medium: { deadzone: 14, error: 22, reactionMs: 110, predict: true, powers: false },
+  hard: { deadzone: 6, error: 6, reactionMs: 40, predict: true, powers: true },
+};
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -37,6 +44,10 @@ class PongGame {
     this.winnerSide = null;
     this.winnerName = null;
     this._lastTs = 0;
+    this.aiEnabled = false;
+    this.aiDifficulty = 'medium';
+    this._aiNextThink = 0;
+    this._aiOffset = 0;
     this._resetBall(1);
     this.leftY = (COURT_H - PADDLE_H) / 2;
     this.rightY = (COURT_H - PADDLE_H) / 2;
@@ -70,14 +81,48 @@ class PongGame {
     return true;
   }
 
+  enableAi(difficulty = 'medium') {
+    if (this.gameState === 'playing') return false;
+    if (this.rightPlayerId && this.rightPlayerId !== AI_ID) return false;
+    const d = AI_CFG[difficulty] ? difficulty : 'medium';
+    this.aiEnabled = true;
+    this.aiDifficulty = d;
+    this._aiNextThink = 0;
+    this._aiOffset = 0;
+    if (!this.players[AI_ID]) {
+      this.rightPlayerId = AI_ID;
+      this.players[AI_ID] = {
+        id: AI_ID,
+        name: `CPU (${d})`,
+        side: 'right',
+        isSpectator: false,
+        isAi: true,
+      };
+    } else {
+      this.players[AI_ID].name = `CPU (${d})`;
+      this.rightPlayerId = AI_ID;
+    }
+    return true;
+  }
+
+  disableAi() {
+    if (!this.aiEnabled && !this.players[AI_ID]) return false;
+    if (this.gameState === 'playing') return false;
+    if (this.players[AI_ID]) {
+      delete this.players[AI_ID];
+      if (this.rightPlayerId === AI_ID) {
+        this.rightPlayerId = null;
+        this.rightDir = 0;
+      }
+    }
+    this.aiEnabled = false;
+    return true;
+  }
+
   _paddleHeight(side, now = Date.now()) {
     if (this.mode !== 'arcade') return PADDLE_H;
     const p = this.powers[side];
     return now < p.wideUntil ? Math.round(PADDLE_H * WIDE_SCALE) : PADDLE_H;
-  }
-
-  _maxY(side, now = Date.now()) {
-    return COURT_H - this._paddleHeight(side, now);
   }
 
   _resetBall(dirX = 1) {
@@ -91,6 +136,7 @@ class PongGame {
   }
 
   addPlayer(id, name) {
+    if (id === AI_ID) return this.players[AI_ID] || null;
     const existing = this.players[id];
     if (existing) return existing;
 
@@ -111,12 +157,17 @@ class PongGame {
       name: name || `Spiller ${Object.keys(this.players).length + 1}`,
       side,
       isSpectator,
+      isAi: false,
     };
     this.players[id] = player;
     return player;
   }
 
   removePlayer(id) {
+    if (id === AI_ID) {
+      this.disableAi();
+      return;
+    }
     const p = this.players[id];
     if (!p) return;
     if (this.leftPlayerId === id) {
@@ -136,6 +187,7 @@ class PongGame {
   }
 
   setPaddleInput(playerId, direction) {
+    if (playerId === AI_ID) return false;
     const p = this.players[playerId];
     if (!p || p.isSpectator || !p.side) return false;
     const d = String(direction || '').toLowerCase();
@@ -148,7 +200,6 @@ class PongGame {
     return true;
   }
 
-  /** Arcade: wide | nudge | smash (eller power aliases). */
   usePower(playerId, power) {
     if (this.mode !== 'arcade' || this.gameState !== 'playing') return false;
     const p = this.players[playerId];
@@ -200,6 +251,7 @@ class PongGame {
     this.leftDir = 0;
     this.rightDir = 0;
     this._initPowers();
+    this._aiNextThink = 0;
     this._resetBall(Math.random() < 0.5 ? -1 : 1);
     this.gameState = 'playing';
     this._lastTs = Date.now();
@@ -219,9 +271,68 @@ class PongGame {
     this._initPowers();
     this._resetBall(1);
     if (!keepPlayers) {
+      const aiWas = this.aiEnabled;
+      const aiDiff = this.aiDifficulty;
       this.players = {};
       this.leftPlayerId = null;
       this.rightPlayerId = null;
+      this.aiEnabled = false;
+      if (aiWas) this.enableAi(aiDiff);
+    }
+  }
+
+  _predictBallY(targetX) {
+    let x = this.ball.x;
+    let y = this.ball.y;
+    let vx = this.ball.vx;
+    let vy = this.ball.vy;
+    if (vx <= 0) return this.ball.y;
+    let guard = 0;
+    while (x < targetX && guard++ < 400) {
+      const dt = 0.012;
+      x += vx * dt;
+      y += vy * dt;
+      if (y - BALL_R <= 0) {
+        y = BALL_R;
+        vy = Math.abs(vy);
+      } else if (y + BALL_R >= COURT_H) {
+        y = COURT_H - BALL_R;
+        vy = -Math.abs(vy);
+      }
+    }
+    return y;
+  }
+
+  _updateAi(now) {
+    if (!this.aiEnabled || this.rightPlayerId !== AI_ID) return;
+    const cfg = AI_CFG[this.aiDifficulty] || AI_CFG.medium;
+    const rightH = this._paddleHeight('right', now);
+    const center = this.rightY + rightH / 2;
+
+    if (now < this._aiNextThink) return;
+    this._aiNextThink = now + cfg.reactionMs;
+    this._aiOffset = (Math.random() - 0.5) * 2 * cfg.error;
+
+    const rightX = COURT_W - PADDLE_MARGIN - PADDLE_W;
+    let targetY;
+    if (this.ball.vx > 0) {
+      targetY = cfg.predict ? this._predictBallY(rightX) : this.ball.y;
+    } else {
+      targetY = COURT_H / 2;
+    }
+    targetY += this._aiOffset;
+
+    if (center < targetY - cfg.deadzone) this.rightDir = 1;
+    else if (center > targetY + cfg.deadzone) this.rightDir = -1;
+    else this.rightDir = 0;
+
+    if (cfg.powers && this.mode === 'arcade' && this.ball.vx > 0) {
+      const dist = rightX - this.ball.x;
+      if (dist < 220 && Math.random() < 0.04) this.usePower(AI_ID, 'smash');
+      if (dist < 160 && Math.abs(center - targetY) > 40 && Math.random() < 0.03) {
+        this.usePower(AI_ID, 'nudge');
+      }
+      if (Math.random() < 0.008) this.usePower(AI_ID, 'wide');
     }
   }
 
@@ -230,6 +341,8 @@ class PongGame {
     const now = Date.now();
     const dt = Math.min(0.05, (now - this._lastTs) / 1000);
     this._lastTs = now;
+
+    this._updateAi(now);
 
     const leftH = this._paddleHeight('left', now);
     const rightH = this._paddleHeight('right', now);
@@ -323,6 +436,10 @@ class PongGame {
     };
   }
 
+  paddleCount() {
+    return (this.leftPlayerId ? 1 : 0) + (this.rightPlayerId ? 1 : 0);
+  }
+
   getState() {
     const now = Date.now();
     const leftH = this._paddleHeight('left', now);
@@ -360,8 +477,10 @@ class PongGame {
       players: this.players,
       leftPlayerId: this.leftPlayerId,
       rightPlayerId: this.rightPlayerId,
+      aiEnabled: this.aiEnabled,
+      aiDifficulty: this.aiDifficulty,
     };
   }
 }
 
-module.exports = { PongGame, TICK_MS, COURT_W, COURT_H };
+module.exports = { PongGame, COURT_W, COURT_H, AI_ID };

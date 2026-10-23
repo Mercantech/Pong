@@ -39,14 +39,28 @@ function getLobbyList() {
   return [...lobbies.entries()].map(([pin, lobby]) => ({
     pin,
     mode: lobby.game.mode,
-    playerCount: lobby.clients.size + (lobby.controllerPlayers?.size || 0),
+    playerCount: lobby.game.paddleCount(),
+    spectatorCount: Math.max(
+      0,
+      Object.values(lobby.game.players).filter((p) => p.isSpectator).length
+    ),
+    clientCount: lobby.clients.size + (lobby.controllerPlayers?.size || 0),
     gameState: lobby.game.gameState,
+    aiEnabled: !!lobby.game.aiEnabled,
+    aiDifficulty: lobby.game.aiDifficulty || null,
     createdAt: lobby.createdAt,
   }));
 }
 
-function createLobbyEntry(pin, mode = 'classic') {
+function getOpenLobbyList() {
+  return getLobbyList().filter((l) => l.gameState === 'waiting');
+}
+
+function createLobbyEntry(pin, mode = 'classic', opts = {}) {
   const game = new PongGame(mode);
+  if (opts.ai) {
+    game.enableAi(opts.aiDifficulty || 'medium');
+  }
   const entry = {
     game,
     clients: new Set(),
@@ -56,6 +70,28 @@ function createLobbyEntry(pin, mode = 'classic') {
   };
   lobbies.set(pin, entry);
   return entry;
+}
+
+function createLobbyWithOptions({ pin: reqPin, mode: reqMode, ai, aiDifficulty } = {}) {
+  let pin = reqPin ? String(reqPin).trim().slice(0, 8) : generatePin();
+  if (!reqPin) {
+    let attempts = 0;
+    while (lobbies.has(pin) && attempts < 20) {
+      pin = generatePin();
+      attempts++;
+    }
+  }
+  if (lobbies.has(pin)) {
+    return { error: 'PIN eksisterer allerede', pin, conflict: true };
+  }
+  const mode = reqMode === 'arcade' ? 'arcade' : 'classic';
+  createLobbyEntry(pin, mode, { ai: !!ai, aiDifficulty });
+  return {
+    pin,
+    mode,
+    aiEnabled: !!ai,
+    aiDifficulty: ai ? aiDifficulty || 'medium' : null,
+  };
 }
 
 function endLobby(pin) {
@@ -166,18 +202,14 @@ function handleAdminApi(req, res) {
     });
     req.on('end', () => {
       try {
-        const parsedBody = JSON.parse(body || '{}');
-        const { pin: reqPin, mode: reqMode } = parsedBody;
-        const pin = reqPin ? String(reqPin).slice(0, 8) : generatePin();
-        if (lobbies.has(pin)) {
-          res.writeHead(409);
-          res.end(JSON.stringify({ error: 'PIN eksisterer allerede', pin }));
+        const created = createLobbyWithOptions(JSON.parse(body || '{}'));
+        if (created.error) {
+          res.writeHead(created.conflict ? 409 : 400);
+          res.end(JSON.stringify({ error: created.error, pin: created.pin }));
           return;
         }
-        const mode = reqMode === 'arcade' ? 'arcade' : 'classic';
-        createLobbyEntry(pin, mode);
         res.writeHead(201);
-        res.end(JSON.stringify({ pin, mode }));
+        res.end(JSON.stringify(created));
       } catch (e) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: 'Ugyldig forespørgsel' }));
@@ -304,6 +336,44 @@ function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+function handlePublicLobbyApi(req, res) {
+  const parsed = new URL(req.url, `http://localhost:${PORT}`);
+  const pathname = parsed.pathname;
+  res.setHeader('Content-Type', 'application/json');
+
+  if (pathname === '/api/lobbies' && req.method === 'GET') {
+    res.writeHead(200);
+    res.end(JSON.stringify({ lobbies: getOpenLobbyList() }));
+    return;
+  }
+
+  if (pathname === '/api/lobbies' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      try {
+        const created = createLobbyWithOptions(JSON.parse(body || '{}'));
+        if (created.error) {
+          res.writeHead(created.conflict ? 409 : 400);
+          res.end(JSON.stringify({ error: created.error, pin: created.pin }));
+          return;
+        }
+        res.writeHead(201);
+        res.end(JSON.stringify(created));
+      } catch (e) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'Ugyldig forespørgsel' }));
+      }
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end(JSON.stringify({ error: 'Not found' }));
+}
+
 function attachClientToLobby(ws, pin, name) {
   const lobby = lobbies.get(pin);
   if (!lobby) {
@@ -331,6 +401,11 @@ const server = http.createServer((req, res) => {
 
   if (req.url && req.url.startsWith('/api/admin/')) {
     handleAdminApi(req, res);
+    return;
+  }
+
+  if (req.url && (req.url.split('?')[0] === '/api/lobbies' || req.url.startsWith('/api/lobbies?'))) {
+    handlePublicLobbyApi(req, res);
     return;
   }
 
@@ -400,13 +475,17 @@ wss.on('connection', (ws) => {
       const type = msg.type;
 
       if (type === 'createLobby') {
-        const reqPin = msg.pin ? String(msg.pin).trim().slice(0, 8) : generatePin();
-        if (lobbies.has(reqPin)) {
-          sendTo(ws, 'error', { message: 'PIN eksisterer allerede' });
+        const created = createLobbyWithOptions({
+          pin: msg.pin,
+          mode: msg.mode,
+          ai: msg.ai,
+          aiDifficulty: msg.aiDifficulty,
+        });
+        if (created.error) {
+          sendTo(ws, 'error', { message: created.error });
           return;
         }
-        createLobbyEntry(reqPin);
-        sendTo(ws, 'lobbyCreated', { pin: reqPin });
+        sendTo(ws, 'lobbyCreated', created);
         return;
       }
 
@@ -434,7 +513,7 @@ wss.on('connection', (ws) => {
         case 'reset':
           if (game.gameState === 'finished' || game.gameState === 'waiting') {
             stopLobbyTick(lobby);
-            game.reset(false);
+            game.reset(true);
             broadcastToLobby(pin, { type: 'state', data: game.getState() });
           }
           break;
@@ -448,6 +527,18 @@ wss.on('connection', (ws) => {
         case 'setMode': {
           const mode = msg.mode === 'arcade' ? 'arcade' : 'classic';
           if (game.setMode(mode)) {
+            broadcastToLobby(pin, { type: 'state', data: game.getState() });
+          }
+          break;
+        }
+        case 'enableAi': {
+          if (game.gameState === 'waiting' && game.enableAi(msg.difficulty || msg.aiDifficulty || 'medium')) {
+            broadcastToLobby(pin, { type: 'state', data: game.getState() });
+          }
+          break;
+        }
+        case 'disableAi': {
+          if (game.gameState === 'waiting' && game.disableAi()) {
             broadcastToLobby(pin, { type: 'state', data: game.getState() });
           }
           break;

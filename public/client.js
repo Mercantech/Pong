@@ -15,12 +15,21 @@
   const gameScreen = document.getElementById('game-screen');
   const pinInput = document.getElementById('pin-input');
   const nameInput = document.getElementById('name-input');
+  const createName = document.getElementById('create-name');
+  const createPin = document.getElementById('create-pin');
+  const createAi = document.getElementById('create-ai');
+  const aiDifficulty = document.getElementById('ai-difficulty');
   const btnJoin = document.getElementById('btn-join');
   const btnCreateLobby = document.getElementById('btn-create-lobby');
+  const btnRefresh = document.getElementById('btn-refresh-lobbies');
+  const openList = document.getElementById('open-lobby-list');
+  const noOpen = document.getElementById('no-open-lobbies');
   const joinError = document.getElementById('join-error');
   const statusEl = document.getElementById('status');
   const btnStart = document.getElementById('btn-start');
   const btnReset = document.getElementById('btn-reset');
+  const btnToggleAi = document.getElementById('btn-toggle-ai');
+  const btnLeave = document.getElementById('btn-leave');
   const lobbyPinEl = document.getElementById('lobby-pin');
   const canvas = document.getElementById('pong-canvas');
   const ctx = canvas.getContext('2d');
@@ -40,7 +49,19 @@
   let mySide = null;
   let pin = null;
   let state = null;
+  let intentionalLeave = false;
   const keysDown = new Set();
+
+  // Smooth render interpolations
+  let renderBall = null;
+  let renderLeftY = null;
+  let renderRightY = null;
+  let lastFrame = performance.now();
+
+  try {
+    const last = localStorage.getItem('pong_last_pin');
+    if (last && createPin && !createPin.value) createPin.value = last;
+  } catch (_) {}
 
   function selectedMode() {
     const el = document.querySelector('input[name="game-mode"]:checked');
@@ -57,7 +78,56 @@
     joinError.classList.add('hidden');
   }
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  async function refreshOpenLobbies() {
+    if (gameScreen && !gameScreen.classList.contains('hidden')) return;
+    try {
+      const res = await fetch(apiUrl('/api/lobbies'));
+      const data = await res.json();
+      const lobbies = data.lobbies || [];
+      if (!lobbies.length) {
+        openList.innerHTML = '';
+        noOpen?.classList.remove('hidden');
+        return;
+      }
+      noOpen?.classList.add('hidden');
+      openList.innerHTML = lobbies
+        .map((l) => {
+          const tags = [
+            l.mode === 'arcade' ? 'ARCADE' : 'CLASSIC',
+            l.aiEnabled ? `CPU ${l.aiDifficulty || ''}` : `${l.playerCount}/2`,
+          ].join(' · ');
+          return `<div class="open-lobby-row" data-pin="${escapeHtml(l.pin)}">
+            <div class="open-lobby-meta">
+              <span class="pin">${escapeHtml(l.pin)}</span>
+              <span>${escapeHtml(tags)}</span>
+            </div>
+            <button type="button" class="btn-secondary btn-sm btn-join-open">Deltag</button>
+          </div>`;
+        })
+        .join('');
+      openList.querySelectorAll('.btn-join-open').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const row = btn.closest('.open-lobby-row');
+          const p = row?.dataset.pin;
+          if (!p) return;
+          if (pinInput) pinInput.value = p;
+          joinLobby(p, nameInput.value.trim() || createName?.value.trim());
+        });
+      });
+    } catch (_) {}
+  }
+
   function connectWs() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     ws = new WebSocket(wsUrl());
 
     ws.onopen = () => {
@@ -68,6 +138,11 @@
       statusEl.textContent = 'Forbindelse lukket';
       btnStart.disabled = true;
       btnReset.disabled = true;
+      if (!intentionalLeave && pin) {
+        setTimeout(() => {
+          if (!intentionalLeave) connectWs();
+        }, 1500);
+      }
     };
 
     ws.onerror = () => {
@@ -87,6 +162,11 @@
         return;
       }
 
+      if (msg.type === 'lobbyEnded') {
+        leaveToHome('Lobbyen blev lukket');
+        return;
+      }
+
       if (msg.type === 'joined') {
         playerId = msg.data.playerId;
         mySide = msg.data.side;
@@ -94,9 +174,7 @@
         state = msg.data.state;
         joinScreen.classList.add('hidden');
         gameScreen.classList.remove('hidden');
-        lobbyPinEl.textContent = `PIN: ${pin}${
-          state?.mode === 'arcade' ? ' · ARCADE' : ' · CLASSIC'
-        }`;
+        seedRenderFromState();
         updateUi();
         return;
       }
@@ -104,21 +182,33 @@
       if (msg.type === 'state') {
         state = msg.data;
         updateUi();
-        draw();
       }
     };
   }
 
+  function seedRenderFromState() {
+    if (!state) return;
+    renderBall = { ...state.ball };
+    renderLeftY = state.paddles?.left?.y ?? 0;
+    renderRightY = state.paddles?.right?.y ?? 0;
+  }
+
   function joinLobby(lobbyPin, name) {
     clearError();
+    intentionalLeave = false;
     pin = String(lobbyPin).trim();
     if (!pin) {
       showError('Indtast en PIN');
       return;
     }
+    try {
+      localStorage.setItem('pong_last_pin', pin);
+    } catch (_) {}
     const payload = { type: 'joinLobby', pin, name: name || undefined };
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      connectWs();
+    connectWs();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    } else {
       ws.addEventListener(
         'open',
         () => {
@@ -126,29 +216,55 @@
         },
         { once: true }
       );
-    } else {
-      ws.send(JSON.stringify(payload));
     }
   }
 
   async function createLobby() {
     clearError();
+    const name = createName?.value.trim() || nameInput.value.trim();
+    const customPin = createPin?.value.trim() || '';
+    const body = {
+      mode: selectedMode(),
+      ai: !!createAi?.checked,
+      aiDifficulty: aiDifficulty?.value || 'medium',
+    };
+    if (customPin) body.pin = customPin;
     try {
-      const res = await fetch(apiUrl('/api/admin/lobbies'), {
+      const res = await fetch(apiUrl('/api/lobbies'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: selectedMode() }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
         showError(data.error || 'Kunne ikke oprette lobby');
         return;
       }
-      pinInput.value = data.pin;
-      joinLobby(data.pin, nameInput.value.trim());
+      if (pinInput) pinInput.value = data.pin;
+      if (createPin) createPin.value = data.pin;
+      joinLobby(data.pin, name);
     } catch {
       showError('Netværksfejl ved oprettelse');
     }
+  }
+
+  function leaveToHome(msg) {
+    intentionalLeave = true;
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    playerId = null;
+    mySide = null;
+    pin = null;
+    state = null;
+    gameScreen.classList.add('hidden');
+    joinScreen.classList.remove('hidden');
+    if (msg) showError(msg);
+    refreshOpenLobbies();
+    setTimeout(() => {
+      intentionalLeave = false;
+    }, 200);
   }
 
   function sendPaddle(direction) {
@@ -181,12 +297,7 @@
         active: p.wideActive,
         cd: p.wideActive ? `aktiv ${formatCd(p.wideMs)}` : formatCd(p.wideCdMs),
       },
-      {
-        key: 'NUDGE',
-        ready: p.nudgeCdMs <= 0,
-        active: false,
-        cd: formatCd(p.nudgeCdMs),
-      },
+      { key: 'NUDGE', ready: p.nudgeCdMs <= 0, active: false, cd: formatCd(p.nudgeCdMs) },
       {
         key: 'SMASH',
         ready: p.smashCdMs <= 0 && !p.smashArmed,
@@ -196,12 +307,7 @@
     ];
     powerHud.innerHTML = chips
       .map((c) => {
-        const cls = [
-          'power-chip',
-          c.ready ? 'ready' : '',
-          c.active ? 'active' : '',
-          c.armed ? 'armed' : '',
-        ]
+        const cls = ['power-chip', c.ready ? 'ready' : '', c.active ? 'active' : '', c.armed ? 'armed' : '']
           .filter(Boolean)
           .join(' ');
         return `<div class="${cls}">${c.key}<span class="cd">${c.cd}</span></div>`;
@@ -223,28 +329,24 @@
     }
 
     if (pin) {
-      lobbyPinEl.textContent = `PIN: ${pin}${
-        state.mode === 'arcade' ? ' · ARCADE' : ' · CLASSIC'
-      }`;
+      const bits = [`PIN: ${pin}`, state.mode === 'arcade' ? 'ARCADE' : 'CLASSIC'];
+      if (state.aiEnabled) bits.push(`CPU ${state.aiDifficulty || ''}`.trim());
+      lobbyPinEl.textContent = bits.join(' · ');
     }
 
     const me = playerId ? state.players[playerId] : null;
     if (me) {
       if (me.isSpectator) {
         playerInfo.innerHTML = `<span class="spectator-badge">Tilskuer</span> · ${me.name}`;
-        controlsHint.textContent = 'Du ser kampen — maks 2 paddle-spillere i lobbyen.';
+        controlsHint.textContent = 'Du ser kampen — paddles er optaget.';
       } else {
         const sideLabel = me.side === 'left' ? 'venstre paddle' : 'højre paddle';
         playerInfo.textContent = `${me.name} · ${sideLabel}`;
         if (state.mode === 'arcade') {
           controlsHint.textContent =
-            me.side === 'left'
-              ? 'W/S · 1/Q WIDE · 3/E NUDGE · 4/Space SMASH'
-              : '↑/↓ · 1 WIDE · 3 NUDGE · 4/Space SMASH';
-        } else if (me.side === 'left') {
-          controlsHint.textContent = 'Styr: W/S eller ↑/↓';
+            'W/S eller ↑/↓ · 1 WIDE · 3 NUDGE · 4/Space SMASH';
         } else {
-          controlsHint.textContent = 'Styr: ↑/↓ (højre paddle)';
+          controlsHint.textContent = 'Styr: W/S eller ↑/↓';
         }
       }
     }
@@ -254,17 +356,30 @@
     btnStart.disabled = state.gameState !== 'waiting' || paddleCount < 2;
     btnReset.disabled = state.gameState !== 'finished';
 
+    if (btnToggleAi) {
+      const canToggle =
+        state.gameState === 'waiting' &&
+        me &&
+        !me.isSpectator &&
+        (state.aiEnabled || !state.rightPlayerId || state.players[state.rightPlayerId]?.isAi);
+      btnToggleAi.classList.toggle('hidden', !canToggle);
+      btnToggleAi.textContent = state.aiEnabled ? 'Fjern CPU' : 'Tilføj CPU';
+    }
+
     overlay.classList.add('hidden');
     if (state.gameState === 'waiting') {
       overlay.classList.remove('hidden');
       overlayTitle.textContent =
-        state.mode === 'arcade' ? 'Arcade — venter' : 'Venter på start';
-      overlayText.textContent =
-        paddleCount < 2
-          ? 'Vent på modstander (2 spillere)'
-          : state.mode === 'arcade'
-            ? 'WIDE · NUDGE · SMASH — tryk «Start spil»'
-            : 'Tryk «Start spil» når I er klar';
+        state.mode === 'arcade' ? 'Arcade — lobby' : 'Lobby';
+      if (paddleCount < 2) {
+        overlayText.textContent = state.aiEnabled
+          ? 'CPU klar — mangler dig? Tryk Start når venstre er fyldt.'
+          : 'Vent på modstander, eller tilføj CPU';
+      } else {
+        overlayText.textContent = state.aiEnabled
+          ? `Klar vs CPU (${state.aiDifficulty}) — tryk Start`
+          : 'Tryk «Start spil» når I er klar';
+      }
     } else if (state.gameState === 'finished') {
       overlay.classList.remove('hidden');
       const won =
@@ -275,20 +390,47 @@
         : state.winnerName
           ? `${state.winnerName} vandt`
           : 'Spillet er slut';
-      overlayText.textContent = 'Tryk «Nyt spil» for at spille igen';
+      overlayText.textContent = 'Tryk «Nyt spil» for rematch';
     }
 
     statusEl.textContent =
       state.gameState === 'playing'
-        ? state.mode === 'arcade'
-          ? 'Arcade'
-          : 'Spiller'
+        ? state.aiEnabled
+          ? 'Vs CPU'
+          : state.mode === 'arcade'
+            ? 'Arcade'
+            : 'Spiller'
         : state.gameState === 'finished'
           ? 'Afsluttet'
           : 'Lobby';
 
     updatePowerHud();
-    draw();
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function drawFrame(now) {
+    const dt = Math.min(0.05, (now - lastFrame) / 1000);
+    lastFrame = now;
+
+    if (state && renderBall) {
+      const t = Math.min(1, dt * 18);
+      renderBall.x = lerp(renderBall.x, state.ball.x, t);
+      renderBall.y = lerp(renderBall.y, state.ball.y, t);
+      renderBall.vx = state.ball.vx;
+      renderBall.vy = state.ball.vy;
+      const leftY = state.paddles?.left?.y ?? 0;
+      const rightY = state.paddles?.right?.y ?? 0;
+      renderLeftY = lerp(renderLeftY ?? leftY, leftY, Math.min(1, dt * 22));
+      renderRightY = lerp(renderRightY ?? rightY, rightY, Math.min(1, dt * 22));
+      draw();
+    } else if (state) {
+      seedRenderFromState();
+      draw();
+    }
+    requestAnimationFrame(drawFrame);
   }
 
   function draw() {
@@ -317,24 +459,32 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    const leftY = state.paddles?.left?.y ?? (h - leftH) / 2;
-    const rightY = state.paddles?.right?.y ?? (h - rightH) / 2;
-
+    const leftY = renderLeftY ?? state.paddles?.left?.y ?? (h - leftH) / 2;
+    const rightY = renderRightY ?? state.paddles?.right?.y ?? (h - rightH) / 2;
     const leftPow = state.powers?.left;
     const rightPow = state.powers?.right;
 
     ctx.fillStyle = leftPow?.wideActive ? '#8cf' : leftPow?.smashArmed ? '#f80' : '#fff';
     ctx.fillRect(margin, leftY, pw, leftH);
-    ctx.fillStyle = rightPow?.wideActive ? '#8cf' : rightPow?.smashArmed ? '#f80' : '#fff';
+    ctx.fillStyle = rightPow?.wideActive
+      ? '#8cf'
+      : rightPow?.smashArmed
+        ? '#f80'
+        : state.aiEnabled
+          ? '#9f9'
+          : '#fff';
     ctx.fillRect(w - margin - pw, rightY, pw, rightH);
 
-    const ball = state.ball;
+    const ball = renderBall || state.ball;
     const smashBall =
       (leftPow?.smashArmed && ball.vx > 0) || (rightPow?.smashArmed && ball.vx < 0);
     ctx.fillStyle = smashBall ? '#ff8c00' : '#fff';
+    ctx.shadowColor = smashBall ? '#ff8c00' : '#fff';
+    ctx.shadowBlur = 8;
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, br, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
   function handleKeyDown(e) {
@@ -346,9 +496,7 @@
       let power = null;
       if (e.key === '1' || e.key === 'q' || e.key === 'Q') power = 'wide';
       if (e.key === '3' || e.key === 'e' || e.key === 'E') power = 'nudge';
-      if (e.key === '4' || e.key === ' ' || e.key === 'r' || e.key === 'R') {
-        power = 'smash';
-      }
+      if (e.key === '4' || e.key === ' ' || e.key === 'r' || e.key === 'R') power = 'smash';
       if (power) {
         keysDown.add(e.key);
         sendPower(power);
@@ -358,13 +506,8 @@
     }
 
     let dir = null;
-    if (me.side === 'left') {
-      if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') dir = 'up';
-      if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') dir = 'down';
-    } else if (me.side === 'right') {
-      if (e.key === 'ArrowUp') dir = 'up';
-      if (e.key === 'ArrowDown') dir = 'down';
-    }
+    if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') dir = 'up';
+    if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') dir = 'down';
 
     if (dir && !keysDown.has(e.key)) {
       keysDown.add(e.key);
@@ -379,22 +522,20 @@
     const me = state.players[playerId];
     if (!me || me.isSpectator) return;
 
-    const leftKeys = ['w', 'W', 's', 'S', 'ArrowUp', 'ArrowDown'];
-    const rightKeys = ['ArrowUp', 'ArrowDown'];
-    const relevant = me.side === 'left' ? leftKeys : rightKeys;
+    const relevant = ['w', 'W', 's', 'S', 'ArrowUp', 'ArrowDown'];
     if (!relevant.includes(e.key)) return;
-
     const still = relevant.some((k) => keysDown.has(k));
-    if (!still) {
-      sendPaddle('stop');
-    }
+    if (!still) sendPaddle('stop');
   }
 
   btnJoin.addEventListener('click', () => {
-    joinLobby(pinInput.value, nameInput.value.trim());
+    joinLobby(pinInput.value, nameInput.value.trim() || createName?.value.trim());
   });
-
+  pinInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') joinLobby(pinInput.value, nameInput.value.trim());
+  });
   btnCreateLobby.addEventListener('click', createLobby);
+  btnRefresh?.addEventListener('click', refreshOpenLobbies);
 
   btnStart.addEventListener('click', () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -408,8 +549,36 @@
     }
   });
 
+  btnToggleAi?.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !state) return;
+    if (state.aiEnabled) {
+      ws.send(JSON.stringify({ type: 'disableAi' }));
+    } else {
+      ws.send(
+        JSON.stringify({
+          type: 'enableAi',
+          difficulty: aiDifficulty?.value || 'medium',
+        })
+      );
+    }
+  });
+
+  btnLeave?.addEventListener('click', () => leaveToHome());
+
+  createAi?.addEventListener('change', () => {
+    if (aiDifficulty) aiDifficulty.disabled = !createAi.checked;
+  });
+
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
 
-  connectWs();
+  refreshOpenLobbies();
+  setInterval(refreshOpenLobbies, 3000);
+  requestAnimationFrame(drawFrame);
+
+  const urlPin = new URLSearchParams(location.search).get('pin');
+  if (urlPin && pinInput) {
+    pinInput.value = urlPin;
+    joinLobby(urlPin, nameInput.value.trim());
+  }
 })();
